@@ -31,14 +31,17 @@ const registerUser = async (req, res) => {
       password,
     });
 
-    if (user) {
-      res.status(201).json({
-        _id: user._id,
-        name: user.name,
-        email: user.email,
-        token: generateToken(user._id),
-      });
-    }
+if (user) {
+  const token = generateToken(user._id);
+  console.log("✅ Generated token:", token);   // debug log
+  res.status(201).json({
+    _id: user._id,
+    name: user.name,
+    email: user.email,
+    token,
+  });
+}
+
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

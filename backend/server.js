@@ -6,20 +6,33 @@ const connectDB = require('./config/db');
 const authRoutes = require('./routes/authRoutes');
 const chatRoutes = require('./routes/chatRoutes');
 const ragRoutes = require('./routes/ragRoutes');
+const modelRoutes = require("./routes/modelRoutes");
 
-// ✅ Load environment variables from backend/.env explicitly
 require('dotenv').config({ path: path.resolve(__dirname, '.env') });
 
-// ✅ Debug log: check if key is loaded (don’t print the key itself)
 console.log('🔑 GEMINI_API_KEY loaded:', process.env.GEMINI_API_KEY ? 'YES' : 'NO');
 
-// ✅ Connect to MongoDB
 connectDB();
 
 const app = express();
 
-// ✅ Middleware
-app.use(cors());
+// ✅ Load allowed origins
+const origins = (process.env.CLIENT_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
+console.log('✅ Allowed origins:', origins);
+
+// ✅ CORS (must be first)
+app.use(cors({
+  origin: (origin, cb) => {
+    console.log("🌐 Incoming request origin:", origin);
+    if (!origin || origins.includes(origin)) {
+      return cb(null, true);
+    }
+    return cb(new Error(`Not allowed by CORS: ${origin}`));
+  },
+  credentials: true,
+}));
+
+// ✅ JSON & URL encoding
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -32,13 +45,12 @@ if (!fs.existsSync('./uploads')) {
 app.use('/api/auth', authRoutes);
 app.use('/api/chat', chatRoutes);
 app.use('/api/rag', ragRoutes);
+app.use("/api/models", modelRoutes);
 
-// ✅ Health check route
 app.get('/api/health', (req, res) => {
   res.json({ status: 'OK', message: 'EduChat AI Backend is running' });
 });
 
-// ✅ Error handler
 app.use((err, req, res, next) => {
   console.error(err.stack);
   res.status(500).json({
@@ -47,12 +59,10 @@ app.use((err, req, res, next) => {
   });
 });
 
-// ✅ 404 handler
 app.use((req, res) => {
   res.status(404).json({ message: 'Route not found' });
 });
 
-// ✅ Start server
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
