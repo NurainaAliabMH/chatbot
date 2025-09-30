@@ -13,29 +13,23 @@ const sendMessage = async (req, res) => {
     console.log("   Message:", message);
 
     if (!message || message.trim() === '') {
-      console.warn(">>> [sendMessage] Empty message received");
       return res.status(400).json({ message: 'Message cannot be empty' });
     }
 
     let conversation;
     if (conversationId) {
-      console.log(">>> [sendMessage] Fetching existing conversation:", conversationId);
       conversation = await Conversation.findOne({ _id: conversationId, userId });
       if (!conversation) {
-        console.warn(">>> [sendMessage] Conversation not found for ID:", conversationId);
         return res.status(404).json({ message: 'Conversation not found' });
       }
     } else {
-      console.log(">>> [sendMessage] Creating new conversation");
       conversation = new Conversation({
         userId,
         title: message.substring(0, 50),
-        messages: [], // safer initialization
       });
     }
 
     const sentiment = analyzeSentiment(message);
-    console.log(">>> [sendMessage] Sentiment analysis:", sentiment);
 
     conversation.messages.push({
       role: 'user',
@@ -43,39 +37,40 @@ const sendMessage = async (req, res) => {
       sentiment,
     });
 
-    let relevantDocs = [];
-    try {
-      relevantDocs = await searchKnowledgeBase(message) || [];
-      console.log(">>> [sendMessage] Relevant docs found:", relevantDocs.length);
-    } catch (ragErr) {
-      console.error(">>> [sendMessage] RAG search error:", ragErr.message);
+    // 🔍 Search KB
+    const relevantDocs = await searchKnowledgeBase(message) || [];
+    console.log(">>> Relevant docs found:", relevantDocs.length);
+
+    if (relevantDocs.length === 0) {
+      // ❌ No context, refuse politely
+      const fallback = "⚠️ Sorry, I can only answer questions related to the uploaded documents.";
+      conversation.messages.push({
+        role: 'bot',
+        content: fallback,
+        sentiment: 'neutral',
+      });
+      await conversation.save();
+
+      return res.json({
+        conversationId: conversation._id,
+        message: {
+          role: 'bot',
+          content: fallback,
+          timestamp: new Date(),
+        },
+        usedRAG: false,
+        sources: 0,
+      });
     }
 
-    let context = '';
-    try {
-      context = buildContext(relevantDocs);
-      console.log(">>> [sendMessage] Built context length:", context.length);
-    } catch (ctxErr) {
-      console.error(">>> [sendMessage] Context build error:", ctxErr.message);
-    }
-
+    // ✅ Build context when docs exist
+    const context = buildContext(relevantDocs);
     const recentMessages = conversation.messages.slice(-5);
-    const conversationContext = recentMessages
-      .map(msg => `${msg.role}: ${msg.content}`)
-      .join('\n');
-
+    const conversationContext = recentMessages.map(msg => `${msg.role}: ${msg.content}`).join('\n');
     const fullContext = `${context}\n\nRecent Conversation:\n${conversationContext}`;
-    console.log(">>> [sendMessage] Full context length:", fullContext.length);
 
     console.log(">>> [sendMessage] Sending to Gemini...");
-    let botResponse = '';
-    try {
-      botResponse = await generateResponse(message, fullContext);
-      console.log(">>> [sendMessage] Gemini replied:", botResponse?.substring(0, 100), '...');
-    } catch (geminiErr) {
-      console.error(">>> [sendMessage] Gemini error:", geminiErr.message);
-      return res.status(500).json({ message: 'Gemini API failed', error: geminiErr.message });
-    }
+    const botResponse = await generateResponse(message, fullContext);
 
     conversation.messages.push({
       role: 'bot',
@@ -83,13 +78,7 @@ const sendMessage = async (req, res) => {
       sentiment: 'neutral',
     });
 
-    try {
-      await conversation.save();
-      console.log(">>> [sendMessage] Conversation saved with ID:", conversation._id);
-    } catch (dbErr) {
-      console.error(">>> [sendMessage] Mongo save error:", dbErr.message);
-      return res.status(500).json({ message: 'Failed to save conversation', error: dbErr.message });
-    }
+    await conversation.save();
 
     res.json({
       conversationId: conversation._id,
@@ -98,14 +87,15 @@ const sendMessage = async (req, res) => {
         content: botResponse,
         timestamp: new Date(),
       },
-      usedRAG: relevantDocs.length > 0,
+      usedRAG: true,
       sources: relevantDocs.length,
     });
   } catch (error) {
-    console.error(">>> [sendMessage] Unexpected error:", error);
+    console.error(">>> [sendMessage] Error:", error);
     res.status(500).json({ message: 'Failed to process message', error: error.message });
   }
 };
+
 
 
 // Get conversation history

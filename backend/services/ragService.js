@@ -1,24 +1,25 @@
+// backend/services/ragService.js
 const KnowledgeBase = require('../models/KnowledgeBase');
 
 // Search knowledge base for relevant context
 const searchKnowledgeBase = async (query, limit = 3) => {
   try {
-    // Text search in MongoDB
-    const results = await KnowledgeBase.find(
+    // First try MongoDB full-text search
+    let results = await KnowledgeBase.find(
       { $text: { $search: query } },
       { score: { $meta: 'textScore' } }
     )
       .sort({ score: { $meta: 'textScore' } })
       .limit(limit);
 
-    if (results.length === 0) {
-      // Fallback: keyword matching
-      const keywords = query.toLowerCase().split(' ');
-      const fallbackResults = await KnowledgeBase.find({
-        keywords: { $in: keywords }
+    // 🔍 Fallback: regex search on content + metadata.source
+    if (!results.length) {
+      results = await KnowledgeBase.find({
+        $or: [
+          { content: { $regex: query, $options: 'i' } },
+          { 'metadata.source': { $regex: query, $options: 'i' } },
+        ],
       }).limit(limit);
-      
-      return fallbackResults;
     }
 
     return results;
@@ -36,7 +37,9 @@ const buildContext = (documents) => {
 
   return documents
     .map((doc, index) => {
-      return `[Source ${index + 1}]\nCategory: ${doc.category}\n${doc.question ? `Q: ${doc.question}\n` : ''}Content: ${doc.content}\n`;
+      return `[Source ${index + 1}]\nCategory: ${doc.category}\n${
+        doc.question ? `Q: ${doc.question}\n` : ''
+      }Content: ${doc.content}\n`;
     })
     .join('\n---\n');
 };
@@ -44,10 +47,16 @@ const buildContext = (documents) => {
 // Add document to knowledge base
 const addToKnowledgeBase = async (documentData) => {
   try {
-    const keywords = extractKeywords(documentData.content);
+    let keywords = extractKeywords(documentData.content);
+
+    // ✅ Auto-inject "resume" if filename suggests it
+    if (documentData.metadata?.source?.toLowerCase().includes('resume')) {
+      keywords.push('resume');
+    }
+
     const document = await KnowledgeBase.create({
       ...documentData,
-      keywords,
+      keywords: [...new Set(keywords)], // ensure uniqueness
     });
     return document;
   } catch (error) {
@@ -58,9 +67,23 @@ const addToKnowledgeBase = async (documentData) => {
 
 // Simple keyword extraction
 const extractKeywords = (text) => {
-  const stopWords = ['the', 'is', 'at', 'which', 'on', 'a', 'an', 'and', 'or', 'but'];
+  const stopWords = [
+    'the',
+    'is',
+    'at',
+    'which',
+    'on',
+    'a',
+    'an',
+    'and',
+    'or',
+    'but',
+  ];
   const words = text.toLowerCase().match(/\b\w+\b/g) || [];
-  return [...new Set(words.filter(word => word.length > 3 && !stopWords.includes(word)))].slice(0, 20);
+  return [...new Set(words.filter((word) => word.length > 3 && !stopWords.includes(word)))].slice(
+    0,
+    20
+  );
 };
 
 module.exports = {
